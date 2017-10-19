@@ -21,7 +21,7 @@ class FileNodeDetailView(DetailView):
 
         from media_tree.models import FileNode
         from media_tree.contrib.views.detail import FileNodeDetailView
-        from django.conf.urls.defaults import *
+        from django.conf.urls import patterns, url, include
 
         urlpatterns = patterns('',
             (r'^files/(?P<path>.+)/$', FileNodeDetailView.as_view(
