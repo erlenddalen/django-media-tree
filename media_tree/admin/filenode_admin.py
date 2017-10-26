@@ -523,7 +523,7 @@ class FileNodeAdmin(MPTTModelAdmin):
                     self.save_model(request, node, None, False)
                     # Respond with success
                     if request.is_ajax():
-                        return HttpResponse('{"success": true}', mimetype="application/json")
+                        return HttpResponse('{"success": true}', content_type="application/json")
                     else:
                         messages.info(request, _('Successfully uploaded file %s.') % node.name)
                         return HttpResponseRedirect(reverse('admin:media_tree_filenode_changelist'))
@@ -532,7 +532,7 @@ class FileNodeAdmin(MPTTModelAdmin):
                     if request.is_ajax():
                         return HttpResponse('{"error": "%s"}' % ' '.join(
                             [item for sublist in form.errors.values() for item in sublist]), 
-                            mimetype="application/json")
+                            content_type="application/json")
 
             # Form is rendered for troubleshooting XHR upload. 
             # If this form works, the problem is not server-side.
@@ -546,7 +546,7 @@ class FileNodeAdmin(MPTTModelAdmin):
         except Exception as e:
             if request.is_ajax():
                 return HttpResponse('{"error": "%s"}' % ugettext('Server Error'), 
-                    mimetype="application/json")
+                    content_type="application/json")
             else:
                 raise
 
