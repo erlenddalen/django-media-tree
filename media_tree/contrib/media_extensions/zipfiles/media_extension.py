@@ -15,7 +15,7 @@ class ZipFileAdminExtender(extension.AdminExtender):
             file_name = ugettext('Archive')
         file_ext = 'zip'
         
-        response = HttpResponse(content_type='application/zip')
+        response = HttpResponse(mimetype='application/zip')
         response['Content-Disposition'] = 'attachment; filename=%s.%s' % (
             file_name, file_ext)
         buffer = StringIO()
