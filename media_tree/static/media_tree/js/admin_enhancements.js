@@ -54,9 +54,11 @@ jQuery(function($) {
         );
 
         var form = makeForm($('#object-tool-add-folder').attr('href'));
+        form.attr('class', 'add-folder');
         form.append(
-            '<span style="white-space: nowrap;"><input type="text" id="add-folder-name" name="name" value="'+gettext('New folder')+'"/>'
-            +'&nbsp;<input type="submit" class="button" value="'+gettext('Save')+'" /></span>'
+            '<a class="folder-toggle dummy" rel="%s">&nbsp;</a><span style="white-space: nowrap;"><input type="text" id="add-folder-name" name="name" value="'+gettext('New folder')+'"/>'
+            +'&nbsp;<input type="submit" class="button default" value="'+gettext('Save')+'" />'
+            +'&nbsp;<input type="submit" class="button cancel" value="'+gettext('Cancel')+'" /></span>'
             +'<input type="hidden" name="parent" value="' + (targetFolder ? targetFolder.id : '') + '" />'
             +(targetFolder ? '<input type="hidden" name="folder_id" value="' + targetFolder.id + '" />' : '')
         );
@@ -79,6 +81,16 @@ jQuery(function($) {
         }
 
         $('#add-folder-name').select().focus();
+        $('.button.cancel', form).on('click', function() {
+            row.remove();
+            return false;
+        });
+        $(form).on('keyup', function(evt) {
+            if (evt.keyCode == 27) {
+                row.remove();
+                return false;
+            }
+        });
     });
     
     if (document.location.href.indexOf('pop=1') != -1) {
@@ -277,20 +289,32 @@ jQuery(function($) {
         var rootDroppable;
         var dragDropScope = 'drag-filenode';
 
-        var initDroppable = function(target, loaderTarget) { 
+        var getDropTargetId = function(droppable) {
+            if (droppable != rootDroppable) {
+                var node = $('.node', droppable);
+                if (node.is('.folder')) {
+                    // drop on folder
+                    return $(rowSelectInputSel, droppable).val();
+                } else {
+                    // drop next to sibling
+                    return node.attr('data-parentid');
+                }
+            } else {
+                // drop on root
+                return '';
+            }
+        };
+
+        var getSelectedCheckboxes = function() {
+            return $(rowSelectInputSel + ':checked', _changelist);
+        };
+
+        var initDroppable = function(target, loaderTarget) {
             return $(target).droppable({
                 drop: function(event, ui) {
                     dragHelper = null;
                     draggedItem = null;
-                    var targetId;
-
-                    if (this != rootDroppable) {
-                        // drop on folder
-                        targetId = $(rowSelectInputSel, target).val();
-                    } else {
-                        // drop on root
-                        targetId = '';
-                    }
+                    var targetId = getDropTargetId(this);
 
                     var action = $(ui.draggable).data('copyDrag') ? 'copy_selected' : 'move_selected';
                     var fields = {
@@ -300,16 +324,15 @@ jQuery(function($) {
                     };
 
                     var form = makeForm('', fields);
-                    var selected = $(rowSelectInputSel + ':checked', _changelist);
+                    var selected = getSelectedCheckboxes();
                     form.append(selected.clone()); 
                     
                     //form.submit();
                     
                     //return;
                     // instead:
-                    var _target = $(target);
                     if (!loaderTarget) {
-                        loaderTarget = _target;
+                        loaderTarget = $('#node-'+targetId).closest('tr');
                     }
                     loaderTarget.addClass('loading');
 
@@ -342,8 +365,26 @@ jQuery(function($) {
                     return false;      
                 },
                 scope: dragDropScope,
-                hoverClass: 'drop-hover',
+                hoverClass: function() {
+                    return $('.node', this).is('.folder') ?
+                        'drop-parent' : 'drop-sibling';
+                },
                 greedy: true,
+                accept: function(draggable) {
+                    // TODO: currently when trying to drop on self the item will be
+                    // moved to root. This is only partially solved by setting the
+                    // draggables distance to half its height.
+                    var result = true,
+                        targetId = getDropTargetId(this);
+                    getSelectedCheckboxes().each(function(index, input) {
+                        var nodeId = $(input).val(),
+                            parentId = $('#node-' + nodeId).attr('data-parentid');
+                        if (parentId == targetId) {
+                            result = false;
+                        }
+                    });
+                    return result;
+                }
             });
         };
 
@@ -353,10 +394,11 @@ jQuery(function($) {
         // the table, since jQuery prevents dropping on self and then propagates the
         // event up the the table if the table is a droppable).
         // Solution for now: The thead is the root droppable.
-        rootDroppable = initDroppable($('thead', _changelist), $(_changelist))[0];
+        rootDroppable = initDroppable($('table', _changelist), $(_changelist))[0];
 
         $(rowSel).each(function() {
             $(this).draggable({
+                distance: $(this).outerHeight() / 2,
                 stop: function(event, ui) {
                     if ($(this).data('deselectAfterDrop')) {
                         $(this).data('deselectAfterDrop', false);
@@ -405,9 +447,7 @@ jQuery(function($) {
                 delay: 200
             }).disableSelection();
 
-            if ($('.node', this).is('.folder')) {
-                initDroppable(this);
-            }
+            initDroppable(this);
         });
 
         if (!isInitial) {
@@ -451,21 +491,27 @@ jQuery(function($) {
         if (!isExpanded) {
             //parentRow.data('isExpanded', true);
             controls.addClass('loading');
-            $.get(href, function(data) {
-                //if (!parentRow.data('isExpanded')) return;
-                if (!controls.is('.loading')) return;
-                controls.removeClass('loading');
-                controls.addClass('expanded');
-                controls.removeClass('collapsed');
-                var tbody = $(data).find('#changelist tbody');
-                var rows =  $('tr', tbody);
-                if (rows.length > 0) {
-                    button.removeClass('empty');
-                } else {
-                    button.addClass('empty');
+            $.ajax({
+                url: href, 
+                success: function(data) {
+                    //if (!parentRow.data('isExpanded')) return;
+                    if (!controls.is('.loading')) return;
+                    controls.removeClass('loading');
+                    controls.addClass('expanded');
+                    controls.removeClass('collapsed');
+                    var tbody = $(data).find('#changelist tbody');
+                    var rows =  $('tr', tbody);
+                    if (rows.length > 0) {
+                        button.removeClass('empty');
+                    } else {
+                        button.addClass('empty');
+                    }
+                    parentRow.addExpandedChildren(rows);
+                    $('#changelist').trigger('update', [rows]);
+                },
+                error: function() {
+                    controls.removeClass('loading');
                 }
-                parentRow.addExpandedChildren(rows);
-                $('#changelist').trigger('update', [rows]);
             });
         } else {
             parentRow.data('isExpanded', false);

@@ -1,5 +1,5 @@
 from media_tree.contrib.cms_plugins.media_tree_image.views import ImagePluginDetailView
-from django.conf.urls.defaults import *
+from django.conf.urls import patterns, url, include
 
 urlpatterns = patterns('',
     url(r'^(?P<pk>\d+)/$', ImagePluginDetailView.as_view(),

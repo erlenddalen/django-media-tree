@@ -25,7 +25,7 @@ class FileNodeListingView(ListView):
 
         from media_tree.models import FileNode
         from media_tree.contrib.views.listing import FileNodeListingView
-        from django.conf.urls.defaults import *
+        from django.conf.urls import patterns, url, include
 
         urlpatterns = patterns('',
             (r'^listing/$', FileNodeListingView.as_view(
@@ -43,7 +43,7 @@ class FileNodeListingView(ListView):
 
         from media_tree.models import FileNode
         from media_tree.contrib.views.listing import FileNodeListingView, LISTING_MERGED
-        from django.conf.urls.defaults import *
+        from django.conf.urls import patterns, url, include
 
         urlpatterns = patterns('',
             (r'^listing/$', FileNodeListingView.as_view(

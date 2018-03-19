@@ -8,8 +8,8 @@ from django.utils.translation import ugettext_lazy as _
 
 
 class MediaTreeImageSiteManager(models.Manager):
-    def get_query_set(self):
-        return super(MediaTreeImageSiteManager, self).get_query_set().filter(node__site=Site.objects.get_current)
+    def get_queryset(self):
+        return super(MediaTreeImageSiteManager, self).get_queryset().filter(node__site=Site.objects.get_current)
 
 
 class MediaTreeImage(CMSPlugin):

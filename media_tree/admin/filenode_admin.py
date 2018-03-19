@@ -9,7 +9,7 @@
 # Low priority:
 #
 # TODO: Ordering of tree by column (within parent) should be possible
-# TODO: Refactor SWFUpload stuff as extension. This would require signals calls
+# TODO: Refactor FineUploader stuff as extension. This would require signals calls
 #       to be called in the FileNodeAdmin view methods.
 from django.contrib.sites.models import Site
 
@@ -43,7 +43,7 @@ from django.utils.encoding import force_unicode
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, render_to_response
 from django.contrib import admin
-from django.db import models, transaction
+from django.db import models
 from django.template.loader import render_to_string
 from django.contrib.admin.util import unquote
 from django.contrib.admin.templatetags.admin_list import _boolean_icon
@@ -52,6 +52,8 @@ from django.template import RequestContext
 from django.utils.translation import ugettext, ugettext_lazy as _
 from django.conf import settings
 from django.core.urlresolvers import reverse
+from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import UploadedFile
 from django import forms
 from django.core.exceptions import ValidationError, ViewDoesNotExist
 from django.http import HttpResponse, HttpResponseRedirect
@@ -116,13 +118,12 @@ class FileNodeAdmin(MPTTModelAdmin):
             os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery-1.7.1.min.js').replace("\\","/"),
             os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery.ui.js').replace("\\","/"),
             os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery.cookie.js').replace("\\","/"),
-            os.path.join(STATIC_SUBDIR, 'lib', 'fileuploader.js').replace("\\","/"),
+            os.path.join(STATIC_SUBDIR, 'lib/jquery.fineuploader-4.4.0', 'jquery.fineuploader-4.4.0.js').replace("\\","/"),
             os.path.join(STATIC_SUBDIR, 'js', 'admin_enhancements.js').replace("\\","/"),
             os.path.join(STATIC_SUBDIR, 'js', 'django_admin_fileuploader.js').replace("\\","/"),
         ]
         css = {
             'all': (
-                os.path.join(STATIC_SUBDIR, 'css', 'swfupload.css').replace("\\","/"),
                 os.path.join(STATIC_SUBDIR, 'css', 'ui.css').replace("\\","/"),
             )
         }
@@ -298,9 +299,9 @@ class FileNodeAdmin(MPTTModelAdmin):
         if node.is_folder():
             request = get_current_request()
             state = 'expanded' if self.folder_is_open(request, node) else 'collapsed'
-        return '<span id="%s" class="node browse-controls %s %s">%s%s</span>' %  \
+        return '<span id="%s" class="node browse-controls %s %s" data-treeid="%s" data-parentid="%s">%s%s</span>' %  \
             (self.anchor_name(node), 'folder' if node.is_folder() else 'file',
-            state, self.expand_collapse(node), self.admin_link(node, True))
+            state, node.tree_id, node.parent_id or "", self.expand_collapse(node), self.admin_link(node, True))
     browse_controls.short_description = ''
     browse_controls.allow_tags = True
 
@@ -399,11 +400,14 @@ class FileNodeAdmin(MPTTModelAdmin):
             request.session['thumbnail_size'] = thumb_size_key
         thumb_size_key = request.session.get('thumbnail_size', 'default')
         set_request_attr(request, 'thumbnail_size', thumb_size_key)
-        return {
-            'thumbnail_sizes': app_settings.MEDIA_TREE_ADMIN_THUMBNAIL_SIZES,
-            'thumbnail_size_key': thumb_size_key
-        }
-
+        backend = get_media_backend()
+        if backend and backend.supports_thumbnails():
+            return {
+                'thumbnail_sizes': app_settings.MEDIA_TREE_ADMIN_THUMBNAIL_SIZES,
+                'thumbnail_size_key': thumb_size_key
+            }
+        else:
+            return {}
 
     def changelist_view(self, request, extra_context=None):
         response = execute_empty_queryset_action(self, request)
@@ -421,17 +425,6 @@ class FileNodeAdmin(MPTTModelAdmin):
             extra_context = {}
 
         extra_context.update(self.init_changelist_view_options(request))
-
-        if app_settings.MEDIA_TREE_SWFUPLOAD:
-            swfupload_upload_url = reverse('admin:media_tree_filenode_upload')
-            #swfupload_flash_url = os.path.join(settings.MEDIA_URL, STATIC_SUBDIR, 'lib/swfupload/swfupload_fp10/swfupload.swf')
-            swfupload_flash_url = reverse('admin:media_tree_filenode_static_swfupload_swf')
-            extra_context.update({
-                'file_types': app_settings.MEDIA_TREE_ALLOWED_FILE_TYPES,
-                'file_size_limit': app_settings.MEDIA_TREE_FILE_SIZE_LIMIT,
-                'swfupload_flash_url': swfupload_flash_url,
-                'swfupload_upload_url': swfupload_upload_url,
-            })
 
         if request.GET.get(IS_POPUP_VAR, None):
             extra_context.update({'select_button': True})
@@ -472,13 +465,11 @@ class FileNodeAdmin(MPTTModelAdmin):
         return response
 
     @csrf_protect_m
-    @transaction.commit_on_success
     def add_view(self, request, form_url='', extra_context=None):
         return self._add_node_view(request, form_url, extra_context,
             node_type=FileNode.FILE)
 
     @csrf_protect_m
-    @transaction.commit_on_success
     def add_folder_view(self, request, form_url='', extra_context=None):
         return self._add_node_view(request, form_url, extra_context,
             node_type=FileNode.FOLDER)
@@ -514,40 +505,23 @@ class FileNodeAdmin(MPTTModelAdmin):
         form.parent_folder = self.get_parent_folder(request)
         return form
 
-    # Upload view is exempted from CSRF protection since SWFUpload cannot send cookies (i.e. it can only
-    # send cookie values as POST values, but that would render this check useless anyway).
-    # However, Flash Player should already be enforcing a same-domain policy.
     @csrf_protect_m
-    @transaction.commit_on_success
     def upload_file_view(self, request):
         try:
             if not self.has_add_permission(request):
                 raise PermissionDenied
 
-            FILE_PARAM_NAME = 'qqfile'
             self.init_parent_folder(request)
 
             if request.method == 'POST':
-
-                if request.is_ajax() and request.GET.get(FILE_PARAM_NAME, None):
-                    from django.core.files.base import ContentFile
-                    from django.core.files.uploadedfile import UploadedFile
-                    content_file = ContentFile(request.raw_post_data)
-                    uploaded_file = UploadedFile(content_file, request.GET.get(FILE_PARAM_NAME), None, content_file.size)
-                    form = UploadForm(request.POST, {'file': uploaded_file})
-                else:
-                    form = UploadForm(request.POST, request.FILES)
-
+                form = UploadForm(request.POST, request.FILES)
                 if form.is_valid():
                     node = FileNode(file=form.cleaned_data['file'], node_type=FileNode.FILE)
                     parent_folder = self.get_parent_folder(request)
                     if not parent_folder.is_top_node():
                         node.parent = parent_folder
                     self.save_model(request, node, None, False)
-                    # Respond with 'ok' for the client to verify that the upload was successful, since sometimes a failed
-                    # request would not result in a HTTP error and look like a successful upload.
-                    # For instance: When requesting the admin view without authentication, there is a redirect to the
-                    # login form, which to SWFUpload looks like a successful upload request.
+                    # Respond with success
                     if request.is_ajax():
                         return HttpResponse('{"success": true}', mimetype="application/json")
                     else:
@@ -560,12 +534,14 @@ class FileNodeAdmin(MPTTModelAdmin):
                             [item for sublist in form.errors.values() for item in sublist]), 
                             mimetype="application/json")
 
-            # Form is rendered for troubleshooting SWFUpload. If this form works, the problem is not server-side.
+            # Form is rendered for troubleshooting XHR upload. 
+            # If this form works, the problem is not server-side.
             if not settings.DEBUG:
                 raise ViewDoesNotExist
             if request.method == 'GET':
                 form = UploadForm()
-            return render_to_response('admin/media_tree/filenode/upload_form.html', {'form': form})            
+            return render_to_response('admin/media_tree/filenode/upload_form.html', {'form': form},
+                context_instance=RequestContext(request))
 
         except Exception as e:
             if request.is_ajax():
@@ -602,21 +578,16 @@ class FileNodeAdmin(MPTTModelAdmin):
         return javascript_catalog(request, packages=['media_tree'])
 
     def get_urls(self):
-        from django.conf.urls.defaults import patterns, url
+        try:
+            from django.conf.urls.defaults import patterns, url
+        except ImportError:
+            # Django 1.6
+            from django.conf.urls import patterns, url
         urls = super(FileNodeAdmin, self).get_urls()
-        info = self.model._meta.app_label, self.model._meta.module_name
+        # info = self.model._meta.app_label, self.model._meta.module_name
+        info = self.model._meta.app_label, self.model._meta.model_name
         url_patterns = patterns('',
             url(r'^jsi18n/', self.admin_site.admin_view(self.i18n_javascript), name='media_tree_jsi18n'),
-            # Since Flash Player enforces a same-domain policy, the upload will break if static files
-            # are served from another domain. So the built-in static file view is used for the uploader SWF:
-            url(r'^static/swfupload\.swf$',
-                'django.views.static.serve',
-                {'document_root': os.path.join(
-                    # Use STATIC_ROOT by default, use MEDIA_ROOT as fallback
-                    getattr(settings, 'STATIC_ROOT', getattr(settings, 'MEDIA_ROOT')),
-                    STATIC_SUBDIR),
-                'path': 'lib/swfupload/swfupload_fp10/swfupload.swf'},
-                name='%s_%s_static_swfupload_swf' % info),
             url(r'^upload/$',
                 self.admin_site.admin_view(self.upload_file_view),
                 name='%s_%s_upload' % info),
